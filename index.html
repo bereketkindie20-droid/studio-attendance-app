@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Workers Attendance Tracker</title>
+    <title>Studio Attendance App</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body {
@@ -29,13 +29,19 @@
         }
         h2 { margin-top: 0; font-size: 20px; }
         p { color: #666; font-size: 14px; margin-bottom: 20px; }
-        .btn-group {
-            display: flex;
-            gap: 10px;
-            justify-content: center;
+        .hidden { display: none !important; }
+        input, select {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            box-sizing: border-box;
+            font-size: 14px;
         }
+        .btn-group { display: flex; gap: 10px; justify-content: center; }
         button {
-            flex: 1;
+            width: 100%;
             padding: 12px 16px;
             border-radius: 8px;
             border: none;
@@ -45,54 +51,53 @@
             transition: opacity 0.2s;
         }
         button:active { opacity: 0.8; }
-        .btn-checkin {
-            background-color: var(--tg-theme-button-color, #0088cc);
-            color: var(--tg-theme-button-text-color, #ffffff);
-        }
-        .btn-checkout {
-            background-color: #e53e3e;
-            color: #ffffff;
-        }
-        .btn-refresh {
-            background-color: #6c757d;
-            color: white;
-            width: 100%;
-            margin-bottom: 12px;
-        }
-        #status-msg {
-            margin-top: 15px;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-            font-size: 12px;
-        }
-        th, td {
-            padding: 8px;
-            text-align: left;
-            border-bottom: 1px solid #eee;
-        }
+        .btn-primary { background-color: var(--tg-theme-button-color, #0088cc); color: white; }
+        .btn-checkout { background-color: #e53e3e; color: white; }
+        .btn-refresh { background-color: #6c757d; color: white; margin-bottom: 12px; }
+        #status-msg, #reg-msg { margin-top: 15px; font-size: 14px; font-weight: 500; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #eee; }
         th { background-color: #f8f9fa; }
     </style>
 </head>
 <body>
 
-    <div class="card">
+    <!-- ONBOARDING FORM CARD -->
+    <div id="onboarding-card" class="card hidden">
+        <h2>Welcome to the Studio! 👋</h2>
+        <p>Please complete your one-time employee registration.</p>
+        <form id="reg-form" onsubmit="registerEmployee(event)">
+            <input type="text" id="full-name" placeholder="Full Legal Name" required />
+            <input type="tel" id="phone-number" placeholder="Phone Number (09...)" required />
+            <select id="role" required>
+                <option value="" disabled selected>Select Your Role</option>
+                <option value="Lead Video Editor">Lead Video Editor</option>
+                <option value="Assistant Video Editor">Assistant Video Editor</option>
+                <option value="Motion Designer / AE">Motion Designer / AE</option>
+                <option value="Camera Operator">Camera Operator</option>
+                <option value="Production Assistant">Production Assistant</option>
+                <option value="Studio Manager">Studio Manager</option>
+            </select>
+            <button type="submit" class="btn-primary">Register & Continue</button>
+        </form>
+        <div id="reg-msg"></div>
+    </div>
+
+    <!-- MAIN ATTENDANCE CARD -->
+    <div id="attendance-card" class="card hidden">
         <h2 id="user-greeting">Hello, Worker</h2>
-        <p>Studio Location Attendance & Shift Duration</p>
+        <p id="user-role-display">Role: Staff</p>
         
         <div class="btn-group">
-            <button class="btn-checkin" onclick="processAttendance('check-in')">📍 Check In</button>
+            <button class="btn-primary" onclick="processAttendance('check-in')">📍 Check In</button>
             <button class="btn-checkout" onclick="processAttendance('check-out')">🚪 Check Out</button>
         </div>
 
         <div id="status-msg"></div>
     </div>
 
-    <div class="card">
+    <!-- HISTORY LOGS CARD -->
+    <div id="history-card" class="card hidden">
         <h3>Attendance & Shift Logs</h3>
         <button class="btn-refresh" onclick="loadHistory()">🔄 Refresh Logs</button>
         <div id="history-container">Loading logs...</div>
@@ -102,10 +107,69 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        const user = tg.initDataUnsafe?.user || { id: "8108017872", first_name: "Beki", last_name: "Visuals" };
-        const employeeName = `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Worker';
-        
-        document.getElementById('user-greeting').innerText = `Hello, ${employeeName}`;
+        const tgUser = tg.initDataUnsafe?.user || { id: "8108017872", first_name: "Beki", last_name: "Visuals" };
+        let activeProfile = null;
+
+        async function initApp() {
+            try {
+                const res = await fetch(`/api/employee/status/${tgUser.id}`);
+                const data = await res.json();
+
+                if (data.registered) {
+                    activeProfile = data.profile;
+                    showAttendanceDashboard();
+                } else {
+                    document.getElementById('full-name').value = `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim();
+                    document.getElementById('onboarding-card').classList.remove('hidden');
+                }
+            } catch (err) {
+                console.error("Init Error:", err);
+            }
+        }
+
+        async function registerEmployee(e) {
+            e.preventDefault();
+            const regMsg = document.getElementById('reg-msg');
+            regMsg.style.color = '#0088cc';
+            regMsg.innerText = 'Registering profile...';
+
+            const payload = {
+                telegram_id: String(tgUser.id),
+                full_name: document.getElementById('full-name').value,
+                phone_number: document.getElementById('phone-number').value,
+                role: document.getElementById('role').value
+            };
+
+            try {
+                const res = await fetch('/api/employee/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    activeProfile = data.profile;
+                    document.getElementById('onboarding-card').classList.add('hidden');
+                    showAttendanceDashboard();
+                } else {
+                    regMsg.style.color = 'red';
+                    regMsg.innerText = data.message || 'Registration failed.';
+                }
+            } catch (err) {
+                regMsg.style.color = 'red';
+                regMsg.innerText = 'Server error during registration.';
+            }
+        }
+
+        function showAttendanceDashboard() {
+            document.getElementById('user-greeting').innerText = `Hello, ${activeProfile.full_name}`;
+            document.getElementById('user-role-display').innerText = `Role: ${activeProfile.role}`;
+            
+            document.getElementById('attendance-card').classList.remove('hidden');
+            document.getElementById('history-card').classList.remove('hidden');
+            loadHistory();
+        }
 
         function processAttendance(type) {
             const statusMsg = document.getElementById('status-msg');
@@ -121,8 +185,8 @@
             navigator.geolocation.getCurrentPosition(
                 async (position) => {
                     const payload = {
-                        employee_name: employeeName,
-                        telegram_id: String(user.id),
+                        employee_name: activeProfile.full_name,
+                        telegram_id: String(tgUser.id),
                         user_lat: position.coords.latitude,
                         user_lon: position.coords.longitude,
                         check_in_timestamp: new Date().toISOString()
@@ -163,7 +227,7 @@
         async function loadHistory() {
             const container = document.getElementById('history-container');
             try {
-                const res = await fetch(`/api/history/${user.id}`);
+                const res = await fetch(`/api/history/${tgUser.id}`);
                 const logs = await res.json();
 
                 if (!logs || logs.length === 0) {
@@ -186,7 +250,7 @@
             }
         }
 
-        loadHistory();
+        initApp();
     </script>
 </body>
 </html>
