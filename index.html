@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Studio Attendance</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 16px; margin: 0; background: #f4f6f8; color: #333; }
+    .card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 20px; text-align: center; }
+    .btn { background: #0088cc; color: white; padding: 14px 20px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 10px; }
+    .btn-secondary { background: #6c757d; }
+    .status { margin-top: 15px; font-weight: bold; font-size: 15px; }
+    .history-item { background: white; padding: 12px; border-radius: 8px; margin-bottom: 8px; text-align: left; box-shadow: 0 1px 4px rgba(0,0,0,0.05); font-size: 14px; }
+    .tag { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; color: white; }
+    .tag-ON_TIME { background: #28a745; }
+    .tag-EARLY { background: #17a2b8; }
+    .tag-LATE { background: #dc3545; }
+    .tag-OUT_OF_BOUNDS { background: #ffc107; color: #333; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2 id="userName">Hello Worker</h2>
+    <p style="color: #666; font-size: 14px;">Studio Location Attendance</p>
+    <button class="btn" onclick="performCheckIn()">📍 Check In Now</button>
+    <div id="statusMessage" class="status"></div>
+  </div>
+
+  <div class="card" style="text-align: left;">
+    <h3>Attendance Logs</h3>
+    <button class="btn btn-secondary" onclick="loadHistory()" style="margin-bottom: 12px;">🔄 Refresh Logs</button>
+    <div id="historyList">Loading logs...</div>
+  </div>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.expand();
+
+    const user = tg.initDataUnsafe?.user || { first_name: "Worker", last_name: "", id: 12345 };
+    document.getElementById('userName').innerText = "Hello, " + user.first_name;
+
+    async function performCheckIn() {
+      const statusDiv = document.getElementById('statusMessage');
+      statusDiv.style.color = "black";
+      statusDiv.innerText = "Getting GPS location...";
+
+      if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(async (position) => {
+          statusDiv.innerText = "Verifying location...";
+          
+          try {
+            const response = await fetch('/api/check-in', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                employee_name: user.first_name + " " + (user.last_name || ""),
+                telegram_id: user.id,
+                user_lat: position.coords.latitude,
+                user_lon: position.coords.longitude,
+                check_in_timestamp: new Date().toISOString()
+              })
+            });
+
+            const result = await response.json();
+            if(result.success) {
+              statusDiv.style.color = "green";
+              statusDiv.innerText = "Check-in Successful! Status: " + result.status;
+            } else {
+              statusDiv.style.color = "red";
+              statusDiv.innerText = result.message;
+            }
+            loadHistory();
+          } catch(e) {
+            statusDiv.style.color = "red";
+            statusDiv.innerText = "Failed to connect to server!";
+          }
+        }, (error) => {
+          statusDiv.style.color = "red";
+          statusDiv.innerText = "GPS Access Denied! Please enable location services.";
+        }, { enableHighAccuracy: true });
+      } else {
+        statusDiv.innerText = "Geolocation not supported.";
+      }
+    }
+
+    async function loadHistory() {
+      const historyList = document.getElementById('historyList');
+      try {
+        const res = await fetch('/api/history/' + user.id);
+        const logs = await res.json();
+
+        if(!logs || logs.length === 0) {
+          historyList.innerHTML = "<p>No logs found.</p>";
+          return;
+        }
+
+        historyList.innerHTML = logs.map(log => `
+          <div class="history-item">
+            <div><strong>${log.employee_name}</strong></div>
+            <div>Time: ${new Date(log.check_in_time).toLocaleString()}</div>
+            <div style="margin-top: 5px;">
+              <span class="tag tag-${log.status}">${log.status}</span>
+              ${log.minutes_late > 0 ? `<span style="color:red; font-size:12px;"> (${log.minutes_late}m late)</span>` : ''}
+            </div>
+          </div>
+        `).join('');
+      } catch(e) {
+        historyList.innerHTML = "<p style='color:red;'>Failed to load logs.</p>";
+      }
+    }
+
+    loadHistory();
+  </script>
+</body>
+</html>
