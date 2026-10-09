@@ -25,7 +25,6 @@ const MAX_ALLOWED_DISTANCE_METERS = 100;
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Haversine Distance Calculation in Meters
 function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
   const R = 6371e3;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -38,12 +37,66 @@ function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-// Helper: Format minutes into HH:MM
 function formatDuration(totalMinutes) {
     const hours = Math.floor(totalMinutes / 60);
     const mins = totalMinutes % 60;
     return `${hours}h ${mins}m`;
 }
+
+// ==================== ONBOARDING & PROFILE ROUTES ====================
+
+// Check if user is registered
+app.get('/api/employee/status/:telegram_id', async (req, res) => {
+    try {
+        const { telegram_id } = req.params;
+        const { data, error } = await supabase
+            .from('employees')
+            .select('*')
+            .eq('telegram_id', telegram_id)
+            .single();
+
+        if (error || !data) {
+            return res.json({ registered: false });
+        }
+        return res.json({ registered: true, profile: data });
+    } catch (err) {
+        return res.status(500).json({ error: 'Server error checking status' });
+    }
+});
+
+// Register new employee profile
+app.post('/api/employee/register', async (req, res) => {
+    try {
+        const { telegram_id, full_name, phone_number, role } = req.body;
+
+        if (!telegram_id || !full_name || !phone_number || !role) {
+            return res.status(400).json({ success: false, message: 'All fields are required.' });
+        }
+
+        const { data, error } = await supabase.from('employees').insert([{
+            telegram_id,
+            full_name,
+            phone_number,
+            role
+        }]).select().single();
+
+        if (error) throw error;
+
+        // Notify Manager of New Registration
+        const registrationAlert = `👤 <b>NEW EMPLOYEE REGISTERED</b>\n\n` +
+            `Name: <b>${full_name}</b>\n` +
+            `Role: <b>${role}</b>\n` +
+            `Phone: <b>${phone_number}</b>\n` +
+            `Telegram ID: <code>${telegram_id}</code>`;
+
+        await bot.sendMessage(MANAGER_CHAT_ID, registrationAlert, { parse_mode: 'HTML' });
+
+        return res.json({ success: true, profile: data });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: 'Registration failed.' });
+    }
+});
 
 // ==================== CHECK-IN ROUTE ====================
 app.post('/api/check-in', async (req, res) => {
@@ -144,7 +197,6 @@ app.post('/api/check-out', async (req, res) => {
             });
         }
 
-        // Find open check-in entry for today
         const { data: activeLogs, error: searchError } = await supabase
             .from('attendance_logs')
             .select('*')
@@ -164,7 +216,6 @@ app.post('/api/check-out', async (req, res) => {
         const durationMinutes = Math.max(0, Math.round((checkOutDate - checkInDate) / (1000 * 60)));
         const durationFormatted = formatDuration(durationMinutes);
 
-        // Update record in Supabase
         const { error: updateError } = await supabase
             .from('attendance_logs')
             .update({
@@ -175,7 +226,6 @@ app.post('/api/check-out', async (req, res) => {
 
         if (updateError) throw updateError;
 
-        // Send check-out notification to Manager
         const serverNow = new Date();
         const localNow = new Date(serverNow.getTime() + 3 * 60 * 60 * 1000);
         const currentTimeFormatted = localNow.toISOString().substring(11, 16);
@@ -258,7 +308,6 @@ async function sendDailyReport() {
     }
 }
 
-// Daily Cron Job: Runs at 18:00 (6:00 PM) EAT every day
 cron.schedule('0 15 * * *', () => {
     console.log('Running daily attendance summary report...');
     sendDailyReport();
