@@ -38,7 +38,14 @@ function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-// Check-in API Route
+// Helper: Format minutes into HH:MM
+function formatDuration(totalMinutes) {
+    const hours = Math.floor(totalMinutes / 60);
+    const mins = totalMinutes % 60;
+    return `${hours}h ${mins}m`;
+}
+
+// ==================== CHECK-IN ROUTE ====================
 app.post('/api/check-in', async (req, res) => {
     try {
         const { employee_name, telegram_id, user_lat, user_lon, check_in_timestamp } = req.body;
@@ -74,13 +81,12 @@ app.post('/api/check-in', async (req, res) => {
             });
         }
 
-        // Standardize time calculation for East Africa Time (UTC+3)
         const serverNow = new Date();
         const eatOffsetMs = 3 * 60 * 60 * 1000;
         const localNow = new Date(serverNow.getTime() + eatOffsetMs);
 
         const expectedTime = new Date(localNow);
-        expectedTime.setUTCHours(8, 30, 0, 0); // 8:30 AM local target time
+        expectedTime.setUTCHours(8, 30, 0, 0);
 
         const diffMinutes = Math.round((localNow - expectedTime) / (1000 * 60));
         let status = "";
@@ -107,7 +113,8 @@ app.post('/api/check-in', async (req, res) => {
             longitude: user_lon,
             distance_meters: distance,
             status: status,
-            minutes_late: Math.max(0, diffMinutes)
+            minutes_late: Math.max(0, diffMinutes),
+            check_in_time: new Date().toISOString()
         }]);
 
         return res.json({ success: true, status: status, minutes_late: Math.max(0, diffMinutes) });
@@ -118,7 +125,82 @@ app.post('/api/check-in', async (req, res) => {
     }
 });
 
-// History API Route
+// ==================== CHECK-OUT ROUTE ====================
+app.post('/api/check-out', async (req, res) => {
+    try {
+        const { employee_name, telegram_id, user_lat, user_lon } = req.body;
+
+        if (!user_lat || !user_lon) {
+            return res.status(400).json({ success: false, message: "Invalid location coordinates provided." });
+        }
+
+        const distance = getDistanceFromLatLonInMeters(STUDIO_LAT, STUDIO_LON, user_lat, user_lon);
+        const userLocationMapsUrl = `https://maps.google.com/?q=${user_lat},${user_lon}`;
+
+        if (distance > MAX_ALLOWED_DISTANCE_METERS) {
+            return res.json({ 
+                success: false, 
+                message: `You must be at the studio to check out (${Math.round(distance)}m away)!` 
+            });
+        }
+
+        // Find open check-in entry for today
+        const { data: activeLogs, error: searchError } = await supabase
+            .from('attendance_logs')
+            .select('*')
+            .eq('telegram_id', telegram_id)
+            .is('check_out_time', null)
+            .order('check_in_time', { ascending: false })
+            .limit(1);
+
+        if (searchError || !activeLogs || activeLogs.length === 0) {
+            return res.json({ success: false, message: "No active check-in record found for today!" });
+        }
+
+        const activeLog = activeLogs[0];
+        const checkInDate = new Date(activeLog.check_in_time);
+        const checkOutDate = new Date();
+
+        const durationMinutes = Math.max(0, Math.round((checkOutDate - checkInDate) / (1000 * 60)));
+        const durationFormatted = formatDuration(durationMinutes);
+
+        // Update record in Supabase
+        const { error: updateError } = await supabase
+            .from('attendance_logs')
+            .update({
+                check_out_time: checkOutDate.toISOString(),
+                total_minutes_worked: durationMinutes
+            })
+            .eq('id', activeLog.id);
+
+        if (updateError) throw updateError;
+
+        // Send check-out notification to Manager
+        const serverNow = new Date();
+        const localNow = new Date(serverNow.getTime() + 3 * 60 * 60 * 1000);
+        const currentTimeFormatted = localNow.toISOString().substring(11, 16);
+
+        const checkOutMsg = `🚪 <b>EMPLOYEE CHECK-OUT</b>\n\n` +
+            `Employee: <b>${employee_name}</b>\n` +
+            `Check-Out Time: <b>${currentTimeFormatted} EAT</b>\n` +
+            `Total Duration: <b>${durationFormatted}</b>\n` +
+            `📍 <a href="${userLocationMapsUrl}">Check-Out Location Map</a>`;
+
+        await bot.sendMessage(MANAGER_CHAT_ID, checkOutMsg, { parse_mode: 'HTML', disable_web_page_preview: true });
+
+        return res.json({ 
+            success: true, 
+            message: `Check-out successful! Shift duration: ${durationFormatted}`,
+            duration: durationFormatted
+        });
+
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// ==================== HISTORY API ====================
 app.get('/api/history/:telegram_id', async (req, res) => {
     const { telegram_id } = req.params;
     
@@ -133,8 +215,6 @@ app.get('/api/history/:telegram_id', async (req, res) => {
 });
 
 // ==================== AUTOMATED DAILY SUMMARY REPORT ====================
-
-// Helper function to generate and send daily report
 async function sendDailyReport() {
     try {
         const startOfDay = new Date();
@@ -163,9 +243,10 @@ async function sendDailyReport() {
             `⚠️ Out of Bounds: <b>${outOfBounds}</b>\n\n`;
 
         if (logs.length > 0) {
-            reportMsg += `<b>Detailed Log:</b>\n`;
+            reportMsg += `<b>Detailed Work Hours Log:</b>\n`;
             logs.forEach(l => {
-                reportMsg += `- <b>${l.employee_name}</b>: ${l.status} (${Math.round(l.distance_meters)}m)\n`;
+                const hoursText = l.total_minutes_worked ? formatDuration(l.total_minutes_worked) : 'Still Active';
+                reportMsg += `- <b>${l.employee_name}</b>: ${l.status} | Worked: <b>${hoursText}</b>\n`;
             });
         } else {
             reportMsg += `<i>No check-ins recorded today.</i>`;
@@ -178,7 +259,7 @@ async function sendDailyReport() {
 }
 
 // Daily Cron Job: Runs at 18:00 (6:00 PM) EAT every day
-cron.schedule('0 15 * * *', () => { // 15:00 UTC = 18:00 EAT
+cron.schedule('0 15 * * *', () => {
     console.log('Running daily attendance summary report...');
     sendDailyReport();
 });
