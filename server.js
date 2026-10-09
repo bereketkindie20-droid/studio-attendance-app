@@ -45,7 +45,6 @@ function formatDuration(totalMinutes) {
 
 // ==================== ONBOARDING & PROFILE ROUTES ====================
 
-// Check if user is registered
 app.get('/api/employee/status/:telegram_id', async (req, res) => {
     try {
         const { telegram_id } = req.params;
@@ -64,7 +63,6 @@ app.get('/api/employee/status/:telegram_id', async (req, res) => {
     }
 });
 
-// Register new employee profile
 app.post('/api/employee/register', async (req, res) => {
     try {
         const { telegram_id, full_name, phone_number, role } = req.body;
@@ -82,7 +80,6 @@ app.post('/api/employee/register', async (req, res) => {
 
         if (error) throw error;
 
-        // Notify Manager of New Registration
         const registrationAlert = `👤 <b>NEW EMPLOYEE REGISTERED</b>\n\n` +
             `Name: <b>${full_name}</b>\n` +
             `Role: <b>${role}</b>\n` +
@@ -250,7 +247,8 @@ app.post('/api/check-out', async (req, res) => {
     }
 });
 
-// ==================== HISTORY API ====================
+// ==================== HISTORY & ADMIN API ROUTES ====================
+
 app.get('/api/history/:telegram_id', async (req, res) => {
     const { telegram_id } = req.params;
     
@@ -262,6 +260,37 @@ app.get('/api/history/:telegram_id', async (req, res) => {
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
+});
+
+// ADMIN API: Fetch all logs & active staff
+app.get('/api/admin/dashboard-data', async (req, res) => {
+    try {
+        const { data: logs, error: logsError } = await supabase
+            .from('attendance_logs')
+            .select('*')
+            .order('check_in_time', { ascending: false });
+
+        const { data: employees, error: empError } = await supabase
+            .from('employees')
+            .select('*');
+
+        if (logsError || empError) throw logsError || empError;
+
+        const activeNow = logs.filter(l => l.check_in_time && !l.check_out_time);
+
+        return res.json({
+            logs,
+            employees,
+            activeNow
+        });
+    } catch (err) {
+        return res.status(500).json({ error: 'Failed to fetch admin dashboard data' });
+    }
+});
+
+// Serve Admin Dashboard HTML
+app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
 // ==================== AUTOMATED DAILY SUMMARY REPORT ====================
