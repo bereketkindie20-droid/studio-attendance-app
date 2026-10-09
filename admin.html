@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Studio Manager Dashboard</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f4f6f9;
+            margin: 0;
+            padding: 24px;
+            color: #333;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+        h1 { margin: 0; font-size: 24px; color: #1e293b; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .stat-card h3 { margin: 0 0 8px 0; font-size: 14px; color: #64748b; font-weight: 500; }
+        .stat-card .value { font-size: 28px; font-weight: 700; color: #0f172a; }
+        .card {
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 24px;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .card h2 { margin: 0; font-size: 18px; color: #1e293b; }
+        button {
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #1d4ed8; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        th { background-color: #f8fafc; color: #475569; font-weight: 600; }
+        .badge {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .badge-early { background: #dcfce7; color: #15803d; }
+        .badge-ontime { background: #e0f2fe; color: #0369a1; }
+        .badge-late { background: #fee2e2; color: #b91c1c; }
+        .badge-out { background: #fef3c7; color: #b45309; }
+        .badge-active { background: #dbeafe; color: #1d4ed8; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>🎬 Studio Management Dashboard</h1>
+        <button onclick="fetchData()">🔄 Refresh Data</button>
+    </div>
+
+    <!-- STATS OVERVIEW -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <h3>Registered Employees</h3>
+            <div class="value" id="stat-registered">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>Currently Active in Studio</h3>
+            <div class="value" id="stat-active">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>Total Attendance Logs</h3>
+            <div class="value" id="stat-logs">0</div>
+        </div>
+    </div>
+
+    <!-- ACTIVE STAFF CARD -->
+    <div class="card">
+        <h2>📍 Currently Working in Studio</h2>
+        <div style="overflow-x: auto; margin-top: 12px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Employee Name</th>
+                        <th>Check-In Time</th>
+                        <th>Distance</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="active-table">
+                    <tr><td colspan="4">Loading active staff...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ALL ATTENDANCE LOGS CARD -->
+    <div class="card">
+        <div class="card-header">
+            <h2>📜 Attendance History</h2>
+            <button onclick="exportCSV()">📥 Export to CSV</button>
+        </div>
+        <div style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Employee</th>
+                        <th>Check In</th>
+                        <th>Check Out</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="logs-table">
+                    <tr><td colspan="6">Loading logs...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        let allLogs = [];
+
+        async function fetchData() {
+            try {
+                const res = await fetch('/api/admin/dashboard-data');
+                const data = await res.json();
+
+                document.getElementById('stat-registered').innerText = data.employees ? data.employees.length : 0;
+                document.getElementById('stat-active').innerText = data.activeNow ? data.activeNow.length : 0;
+                document.getElementById('stat-logs').innerText = data.logs ? data.logs.length : 0;
+
+                allLogs = data.logs || [];
+
+                // Render Active Table
+                const activeTable = document.getElementById('active-table');
+                if (!data.activeNow || data.activeNow.length === 0) {
+                    activeTable.innerHTML = '<tr><td colspan="4"><i>No staff currently checked in.</i></td></tr>';
+                } else {
+                    let html = '';
+                    data.activeNow.forEach(item => {
+                        const checkInTime = new Date(item.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        html += `<tr>
+                            <td><b>${item.employee_name}</b></td>
+                            <td>${checkInTime}</td>
+                            <td>${Math.round(item.distance_meters)}m</td>
+                            <td><span class="badge badge-active">ACTIVE</span></td>
+                        </tr>`;
+                    });
+                    activeTable.innerHTML = html;
+                }
+
+                // Render Full Logs Table
+                const logsTable = document.getElementById('logs-table');
+                if (!data.logs || data.logs.length === 0) {
+                    logsTable.innerHTML = '<tr><td colspan="6"><i>No attendance history found.</i></td></tr>';
+                } else {
+                    let html = '';
+                    data.logs.forEach(log => {
+                        const date = new Date(log.check_in_time).toLocaleDateString();
+                        const checkIn = new Date(log.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        const checkOut = log.check_out_time 
+                            ? new Date(log.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+                            : '—';
+                        
+                        const duration = log.total_minutes_worked 
+                            ? `${Math.floor(log.total_minutes_worked / 60)}h ${log.total_minutes_worked % 60}m` 
+                            : 'Active';
+
+                        let badgeClass = 'badge-ontime';
+                        if (log.status === 'EARLY') badgeClass = 'badge-early';
+                        if (log.status === 'LATE') badgeClass = 'badge-late';
+                        if (log.status === 'OUT_OF_BOUNDS') badgeClass = 'badge-out';
+
+                        html += `<tr>
+                            <td>${date}</td>
+                            <td><b>${log.employee_name}</b></td>
+                            <td>${checkIn}</td>
+                            <td>${checkOut}</td>
+                            <td>${duration}</td>
+                            <td><span class="badge ${badgeClass}">${log.status}</span></td>
+                        </tr>`;
+                    });
+                    logsTable.innerHTML = html;
+                }
+
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function exportCSV() {
+            if (!allLogs || allLogs.length === 0) {
+                alert('No data to export!');
+                return;
+            }
+
+            let csv = 'ID,Employee Name,Check-In Time,Check-Out Time,Total Minutes Worked,Status,Distance Meters\n';
+            allLogs.forEach(l => {
+                csv += `"${l.id}","${l.employee_name}","${l.check_in_time || ''}","${l.check_out_time || ''}","${l.total_minutes_worked || 0}","${l.status}","${l.distance_meters || 0}"\n`;
+            });
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.setAttribute('href', url);
+            a.setAttribute('download', `attendance_report_${new Date().toISOString().split('T')[0]}.csv`);
+            a.click();
+        }
+
+        fetchData();
+    </script>
+</body>
+</html>
