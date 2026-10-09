@@ -15,9 +15,9 @@ const MANAGER_CHAT_ID = '8108017872'; // Your integrated Telegram ID
 const SUPABASE_URL = 'https://hixfsxlfbblmjqhgjnio.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_fbDQTPbT-MgAXBJxmTjYUA_-Bs33TSQ';
 
-// Studio Location Coordinates (Replace with exact Studio Lat/Lon from Google Maps)
-const STUDIO_LAT = 9.0300; 
-const STUDIO_LON = 38.7400;
+// Studio Location Coordinates (Eldasol Building 1st Floor, Mickey Leland St)
+const STUDIO_LAT = 9.0095; 
+const STUDIO_LON = 38.7809;
 // =======================================================
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
