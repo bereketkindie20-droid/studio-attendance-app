@@ -18,6 +18,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_fbDQTPbT-MgAXBJxmTjYUA_-Bs33TSQ';
 // Studio Location Coordinates (Eldasol Building 1st Floor, Mickey Leland St)
 const STUDIO_LAT = 9.0095; 
 const STUDIO_LON = 38.7809;
+const MAX_ALLOWED_DISTANCE_METERS = 100;
 // =======================================================
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
@@ -40,11 +41,22 @@ function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
 app.post('/api/check-in', async (req, res) => {
     try {
         const { employee_name, telegram_id, user_lat, user_lon, check_in_timestamp } = req.body;
-        const distance = getDistanceFromLatLonInMeters(STUDIO_LAT, STUDIO_LON, user_lat, user_lon);
+        
+        // Basic validation
+        if (!user_lat || !user_lon) {
+            return res.status(400).json({ success: false, message: "Invalid location coordinates provided." });
+        }
 
-        if (distance > 100) {
-            const outOfBoundsMsg = `⚠️ <b>OUT OF BOUNDS CHECK-IN</b>\n\nEmployee: <b>${employee_name}</b> attempted check-in from <b>${Math.round(distance)}m</b> away (Outside 100m zone).`;
-            await bot.sendMessage(MANAGER_CHAT_ID, outOfBoundsMsg, { parse_mode: 'HTML' });
+        const distance = getDistanceFromLatLonInMeters(STUDIO_LAT, STUDIO_LON, user_lat, user_lon);
+        const userLocationMapsUrl = `https://maps.google.com/?q=${user_lat},${user_lon}`;
+
+        if (distance > MAX_ALLOWED_DISTANCE_METERS) {
+            const outOfBoundsMsg = `⚠️ <b>OUT OF BOUNDS CHECK-IN</b>\n\n` +
+                `Employee: <b>${employee_name}</b>\n` +
+                `Distance: <b>${Math.round(distance)}m away</b> (Limit: ${MAX_ALLOWED_DISTANCE_METERS}m)\n` +
+                `📍 <a href="${userLocationMapsUrl}">View Attempted Location on Google Maps</a>`;
+            
+            await bot.sendMessage(MANAGER_CHAT_ID, outOfBoundsMsg, { parse_mode: 'HTML', disable_web_page_preview: true });
             
             await supabase.from('attendance_logs').insert([{
                 telegram_id,
@@ -56,30 +68,37 @@ app.post('/api/check-in', async (req, res) => {
                 minutes_late: 0
             }]);
 
-            return res.json({ success: false, message: "You are outside the studio working area!" });
+            return res.json({ 
+                success: false, 
+                message: `You are outside the studio working area (${Math.round(distance)}m away)!` 
+            });
         }
 
-        const now = new Date(check_in_timestamp);
-        const expectedTime = new Date(now);
-        expectedTime.setHours(8, 30, 0, 0); // 2:30 local daytime = 8:30 AM standard time
+        // Standardize time calculation for East Africa Time (UTC+3)
+        const serverNow = new Date();
+        const eatOffsetMs = 3 * 60 * 60 * 1000;
+        const localNow = new Date(serverNow.getTime() + eatOffsetMs);
 
-        const diffMinutes = Math.round((now - expectedTime) / (1000 * 60));
+        const expectedTime = new Date(localNow);
+        expectedTime.setUTCHours(8, 30, 0, 0); // 8:30 AM local target time
+
+        const diffMinutes = Math.round((localNow - expectedTime) / (1000 * 60));
         let status = "";
         let notificationText = "";
-        const currentTimeFormatted = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const currentTimeFormatted = localNow.toISOString().substring(11, 16); // Format HH:MM
 
         if (diffMinutes < 0) {
             status = "EARLY";
-            notificationText = `🟢 <b>EARLY ARRIVAL</b>\n\nEmployee <b>${employee_name}</b> arrived earlier at <b>${currentTimeFormatted}</b>.`;
+            notificationText = `🟢 <b>EARLY ARRIVAL</b>\n\nEmployee: <b>${employee_name}</b>\nTime: <b>${currentTimeFormatted} EAT</b>\n📍 <a href="${userLocationMapsUrl}">Location Map</a>`;
         } else if (diffMinutes <= 30) {
             status = "ON_TIME";
-            notificationText = `✅ <b>ON TIME ARRIVAL</b>\n\nEmployee <b>${employee_name}</b> arrived at <b>${currentTimeFormatted}</b>.`;
+            notificationText = `✅ <b>ON TIME ARRIVAL</b>\n\nEmployee: <b>${employee_name}</b>\nTime: <b>${currentTimeFormatted} EAT</b>\n📍 <a href="${userLocationMapsUrl}">Location Map</a>`;
         } else {
             status = "LATE";
-            notificationText = `🔴 <b>LATE ARRIVAL ALERT</b>\n\nEmployee <b>${employee_name}</b> arrived at <b>${currentTimeFormatted}</b> and is <b>late by ${diffMinutes} minutes</b>!`;
+            notificationText = `🔴 <b>LATE ARRIVAL ALERT</b>\n\nEmployee: <b>${employee_name}</b>\nTime: <b>${currentTimeFormatted} EAT</b>\nStatus: <b>Late by ${diffMinutes} minutes</b>\n📍 <a href="${userLocationMapsUrl}">Location Map</a>`;
         }
 
-        await bot.sendMessage(MANAGER_CHAT_ID, notificationText, { parse_mode: 'HTML' });
+        await bot.sendMessage(MANAGER_CHAT_ID, notificationText, { parse_mode: 'HTML', disable_web_page_preview: true });
 
         await supabase.from('attendance_logs').insert([{
             telegram_id,
