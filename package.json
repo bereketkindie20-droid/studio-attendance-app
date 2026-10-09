@@ -1,6 +1,7 @@
 {
-  "name": "studio-attendance-backend",
+  "name": "studio-attendance-app",
   "version": "1.0.0",
+  "description": "Telegram Mini App for Studio Attendance Tracking",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,6 +10,7 @@
     "@supabase/supabase-js": "^2.39.0",
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "node-telegram-bot-api": "^0.64.0"
+    "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.61.0"
   }
 }
