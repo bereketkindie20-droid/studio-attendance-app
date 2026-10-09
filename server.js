@@ -262,7 +262,6 @@ app.get('/api/history/:telegram_id', async (req, res) => {
     return res.json(data);
 });
 
-// ADMIN API: Fetch all logs & active staff
 app.get('/api/admin/dashboard-data', async (req, res) => {
     try {
         const { data: logs, error: logsError } = await supabase
@@ -288,12 +287,59 @@ app.get('/api/admin/dashboard-data', async (req, res) => {
     }
 });
 
-// Serve Admin Dashboard HTML
 app.get('/admin', (req, res) => {
     res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
-// ==================== AUTOMATED DAILY SUMMARY REPORT ====================
+// ==================== CRON JOB: MORNING ABSENCE SCAN (10:00 AM EAT) ====================
+async function checkMorningAbsences() {
+    try {
+        const startOfDay = new Date();
+        startOfDay.setUTCHours(0, 0, 0, 0);
+
+        // Fetch all registered employees
+        const { data: employees, error: empError } = await supabase
+            .from('employees')
+            .select('*');
+
+        if (empError || !employees || employees.length === 0) return;
+
+        // Fetch today's check-in logs
+        const { data: todayLogs, error: logError } = await supabase
+            .from('attendance_logs')
+            .select('telegram_id')
+            .gte('check_in_time', startOfDay.toISOString());
+
+        if (logError) throw logError;
+
+        const checkedInIds = new Set(todayLogs.map(l => String(l.telegram_id)));
+        const missingEmployees = employees.filter(e => !checkedInIds.has(String(e.telegram_id)));
+
+        if (missingEmployees.length > 0) {
+            const dateStr = new Date().toISOString().split('T')[0];
+            let alertMsg = `⚠️ <b>MORNING ABSENCE / UNCHECKED ALERT (${dateStr})</b>\n\n` +
+                `The following registered employees have <b>NOT checked in</b> as of 10:00 AM EAT:\n\n`;
+
+            missingEmployees.forEach(e => {
+                alertMsg += `• <b>${e.full_name}</b> (${e.role}) — 📞 <code>${e.phone_number}</code>\n`;
+            });
+
+            alertMsg += `\n<i>Please reach out to verify their status.</i>`;
+
+            await bot.sendMessage(MANAGER_CHAT_ID, alertMsg, { parse_mode: 'HTML' });
+        }
+    } catch (err) {
+        console.error('Error running morning absence check:', err);
+    }
+}
+
+// Runs every day at 10:00 AM EAT (07:00 UTC)
+cron.schedule('0 7 * * *', () => {
+    console.log('Running 10:00 AM morning absence check...');
+    checkMorningAbsences();
+});
+
+// ==================== CRON JOB: DAILY SUMMARY REPORT (18:00 PM EAT) ====================
 async function sendDailyReport() {
     try {
         const startOfDay = new Date();
@@ -337,6 +383,7 @@ async function sendDailyReport() {
     }
 }
 
+// Runs every day at 18:00 EAT (15:00 UTC)
 cron.schedule('0 15 * * *', () => {
     console.log('Running daily attendance summary report...');
     sendDailyReport();
