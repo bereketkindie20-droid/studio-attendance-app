@@ -3,6 +3,7 @@ const cors = require('cors');
 const TelegramBot = require('node-telegram-bot-api');
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
+const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
@@ -11,7 +12,7 @@ app.use(express.static(path.join(__dirname)));
 
 // ==================== CONFIGURATION ====================
 const BOT_TOKEN = '8666684034:AAFQWq2RE65DqS86qhB3fBayrbwpzzVEEaQ';
-const MANAGER_CHAT_ID = '8108017872'; // Your integrated Telegram ID
+const MANAGER_CHAT_ID = '8108017872'; // Manager Telegram ID
 const SUPABASE_URL = 'https://hixfsxlfbblmjqhgjnio.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_fbDQTPbT-MgAXBJxmTjYUA_-Bs33TSQ';
 
@@ -42,7 +43,6 @@ app.post('/api/check-in', async (req, res) => {
     try {
         const { employee_name, telegram_id, user_lat, user_lon, check_in_timestamp } = req.body;
         
-        // Basic validation
         if (!user_lat || !user_lon) {
             return res.status(400).json({ success: false, message: "Invalid location coordinates provided." });
         }
@@ -85,7 +85,7 @@ app.post('/api/check-in', async (req, res) => {
         const diffMinutes = Math.round((localNow - expectedTime) / (1000 * 60));
         let status = "";
         let notificationText = "";
-        const currentTimeFormatted = localNow.toISOString().substring(11, 16); // Format HH:MM
+        const currentTimeFormatted = localNow.toISOString().substring(11, 16);
 
         if (diffMinutes < 0) {
             status = "EARLY";
@@ -130,6 +130,57 @@ app.get('/api/history/:telegram_id', async (req, res) => {
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
+});
+
+// ==================== AUTOMATED DAILY SUMMARY REPORT ====================
+
+// Helper function to generate and send daily report
+async function sendDailyReport() {
+    try {
+        const startOfDay = new Date();
+        startOfDay.setUTCHours(0, 0, 0, 0);
+
+        const { data: logs, error } = await supabase
+            .from('attendance_logs')
+            .select('*')
+            .gte('check_in_time', startOfDay.toISOString());
+
+        if (error) throw error;
+
+        const total = logs.length;
+        const early = logs.filter(l => l.status === 'EARLY').length;
+        const onTime = logs.filter(l => l.status === 'ON_TIME').length;
+        const late = logs.filter(l => l.status === 'LATE').length;
+        const outOfBounds = logs.filter(l => l.status === 'OUT_OF_BOUNDS').length;
+
+        const dateStr = new Date().toISOString().split('T')[0];
+
+        let reportMsg = `📊 <b>DAILY ATTENDANCE SUMMARY (${dateStr})</b>\n\n` +
+            `Total Check-in Attempts: <b>${total}</b>\n` +
+            `🟢 Early: <b>${early}</b>\n` +
+            `✅ On Time: <b>${onTime}</b>\n` +
+            `🔴 Late: <b>${late}</b>\n` +
+            `⚠️ Out of Bounds: <b>${outOfBounds}</b>\n\n`;
+
+        if (logs.length > 0) {
+            reportMsg += `<b>Detailed Log:</b>\n`;
+            logs.forEach(l => {
+                reportMsg += `- <b>${l.employee_name}</b>: ${l.status} (${Math.round(l.distance_meters)}m)\n`;
+            });
+        } else {
+            reportMsg += `<i>No check-ins recorded today.</i>`;
+        }
+
+        await bot.sendMessage(MANAGER_CHAT_ID, reportMsg, { parse_mode: 'HTML' });
+    } catch (err) {
+        console.error('Error generating daily report:', err);
+    }
+}
+
+// Daily Cron Job: Runs at 18:00 (6:00 PM) EAT every day
+cron.schedule('0 15 * * *', () => { // 15:00 UTC = 18:00 EAT
+    console.log('Running daily attendance summary report...');
+    sendDailyReport();
 });
 
 const PORT = process.env.PORT || 3000;
